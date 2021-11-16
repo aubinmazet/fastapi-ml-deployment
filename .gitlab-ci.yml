@@ -1,0 +1,79 @@
+---
+stages:
+  - build
+  - test
+  - deploy_staging
+  - integration_test
+  - deploy_prod
+
+variables: 
+  CI_REGISTRY_USER: gitlab+deploy-token-564816
+  CI_REGISTRY: registry.gitlab.com
+  NAMESPACE: amazet
+  IMAGE_NAME: "${CI_REGISTRY}/${NAMESPACE}/${CI_PROJECT_NAME}/fastapi_app"
+  VARIABLES_FILE: variables.txt 
+
+dockerize:
+  image: docker:latest
+  stage: build
+  services:
+    - docker:dind
+  script: 
+    - echo $DEPLOY_TOKEN | docker login -u $CI_REGISTRY_USER --password-stdin registry.gitlab.com
+    - echo "$IMAGE_NAME"
+    - docker build -t "${IMAGE_NAME}" .
+    - docker push "${IMAGE_NAME}"
+  rules:
+    - changes:
+      - src/*
+      - Dockerfile
+
+run-pytest:
+  before_script: 
+    - cd src
+  image: $IMAGE_NAME
+  stage: test
+  script:
+    - pytest tests/units
+  rules:
+    - changes:
+      - src/*
+      - Dockerfile
+
+deploy_staging:
+  before_script:
+    - cd terraform
+    - touch secrets.tfvars
+    - echo -e "docker_username = \""$CI_REGISTRY_USER"\"" >> secrets.tfvars
+    - echo -e "docker_password = \""$DEPLOY_TOKEN"\"" >> secrets.tfvars
+    - echo -e "subscription_id = \""$ARM_SUBSCRIPTION_ID"\"" >> secrets.tfvars
+    - echo -e "client_id = \""$ARM_CLIENT_ID"\"" >> secrets.tfvars
+    - echo -e "client_secret = \""$ARM_CLIENT_SECRET"\"" >> secrets.tfvars
+    - echo -e "tenant_id = \""$ARM_TENANT_ID"\"" >> secrets.tfvars
+  stage: deploy_staging
+  image: 
+    name: hashicorp/terraform:light
+    entrypoint:
+      - '/usr/bin/env'
+      - 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+  script:
+    - terraform init
+    - terraform validate
+    - terraform plan  -var-file secrets.tfvars
+    - terraform apply -auto-approve -var-file secrets.tfvars
+    - IP_ADDRESS=$(terraform output ip_address)
+    - mkdir artifacts
+    - echo "IP_API=$IP_ADDRESS" > artifacts/build.env
+  artifacts:
+    paths:
+      - terraform/artifacts/build.env
+      
+integration_test:
+  before_script: 
+  image: $IMAGE_NAME
+  stage: integration_test
+  script:
+    - source terraform/artifacts/build.env
+    - echo $IP_API
+    - cd src
+    - pytest --ip_api $IP_API --port_api 5000 tests/integration
