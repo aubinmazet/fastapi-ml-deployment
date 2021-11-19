@@ -7,7 +7,6 @@ stages:
   - deploy_prod
 
 variables: 
-  CI_REGISTRY_USER: gitlab+deploy-token-564816
   CI_REGISTRY: registry.gitlab.com
   NAMESPACE: amazet
   IMAGE_NAME: "${CI_REGISTRY}/${NAMESPACE}/${CI_PROJECT_NAME}/fastapi_app"
